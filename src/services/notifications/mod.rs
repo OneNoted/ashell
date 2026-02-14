@@ -272,8 +272,11 @@ impl ReadOnlyService for NotificationService {
                     self.notifications.truncate(self.max_notifications);
                 }
             }
-            NotificationEvent::Closed(id, _reason) => {
-                self.notifications.retain(|n| n.id != id);
+            NotificationEvent::Closed(id, reason) => {
+                // Expired notifications stay in the center until user dismisses them
+                if !matches!(reason, CloseReason::Expired) {
+                    self.notifications.retain(|n| n.id != id);
+                }
             }
         }
     }
