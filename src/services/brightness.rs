@@ -134,7 +134,7 @@ impl BrightnessService {
             },
             State::Active(device_path) => {
                 info!("Listening for brightness events");
-                let current_value = Self::get_actual_brightness(&device_path)
+                let mut current_value = Self::get_actual_brightness(&device_path)
                     .await
                     .unwrap_or_default();
 
@@ -163,6 +163,7 @@ impl BrightnessService {
                                                             .unwrap_or_default();
 
                                                     if new_value != current_value {
+                                                        current_value = new_value;
                                                         let _ = output
                                                             .send(ServiceEvent::Update(
                                                                 BrightnessEvent(new_value),
