@@ -48,9 +48,12 @@ fn get_system_info(
         / system.total_memory() as f32
         * 100.) as u32;
 
-    let memory_swap_usage = ((system.total_swap() - system.free_swap()) as f32
-        / system.total_swap() as f32
-        * 100.) as u32;
+    let memory_swap_usage = if system.total_swap() == 0 {
+        0
+    } else {
+        ((system.total_swap() - system.free_swap()) as f32 / system.total_swap() as f32 * 100.)
+            as u32
+    };
 
     let temperature = components
         .iter()
