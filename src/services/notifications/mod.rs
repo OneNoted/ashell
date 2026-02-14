@@ -1,21 +1,31 @@
 use super::{ReadOnlyService, ServiceEvent};
 use dbus::{BUS_NAME, NotificationDaemon, OBJECT_PATH};
+use freedesktop_icons::lookup;
 use iced::{
     Subscription,
     futures::{SinkExt, StreamExt, channel::mpsc::Sender, stream::pending},
     stream::channel,
+    widget::{image, svg},
 };
-use log::{error, info, warn};
-use std::any::TypeId;
+use linicon_theme::get_icon_theme;
+use log::{debug, error, info, warn};
+use std::{any::TypeId, path::Path};
 use zbus::fdo::RequestNameFlags;
 
 pub mod dbus;
+
+#[derive(Debug, Clone)]
+pub enum NotificationIcon {
+    Image(image::Handle),
+    Svg(svg::Handle),
+}
 
 #[derive(Debug, Clone)]
 pub struct Notification {
     pub id: u32,
     pub app_name: String,
     pub app_icon: String,
+    pub icon: Option<NotificationIcon>,
     pub summary: String,
     pub body: String,
     pub actions: Vec<(String, String)>,
@@ -40,6 +50,46 @@ pub enum CloseReason {
     ByApi = 3,
 }
 
+pub fn resolve_icon(app_icon: &str) -> Option<NotificationIcon> {
+    if app_icon.is_empty() {
+        return None;
+    }
+
+    if app_icon.starts_with('/') {
+        let path = Path::new(app_icon);
+        if !path.exists() {
+            return None;
+        }
+        return if path.extension().is_some_and(|ext| ext == "svg") {
+            debug!("notification svg icon from path: {path:?}");
+            Some(NotificationIcon::Svg(svg::Handle::from_path(path)))
+        } else {
+            debug!("notification raster icon from path: {path:?}");
+            Some(NotificationIcon::Image(image::Handle::from_path(path)))
+        };
+    }
+
+    // Freedesktop icon lookup
+    let base_lookup = lookup(app_icon).with_cache();
+    let found = match get_icon_theme() {
+        Some(theme) => base_lookup.with_theme(&theme).find().or_else(|| {
+            let fallback = lookup(app_icon).with_cache();
+            fallback.find()
+        }),
+        None => base_lookup.find(),
+    };
+
+    found.map(|path| {
+        if path.extension().is_some_and(|ext| ext == "svg") {
+            debug!("notification svg icon found: {path:?}");
+            NotificationIcon::Svg(svg::Handle::from_path(path))
+        } else {
+            debug!("notification raster icon found: {path:?}");
+            NotificationIcon::Image(image::Handle::from_path(path))
+        }
+    })
+}
+
 #[derive(Debug, Clone)]
 pub enum NotificationEvent {
     Notify(Notification),
@@ -61,6 +111,20 @@ impl NotificationService {
             max_notifications,
             default_timeout,
             conn: Some(conn),
+        }
+    }
+
+    pub async fn emit_action_invoked_signal(&self, id: u32, action_key: &str) {
+        if let Some(conn) = &self.conn {
+            let _ = conn
+                .emit_signal(
+                    None::<zbus::names::BusName>,
+                    OBJECT_PATH,
+                    "org.freedesktop.Notifications",
+                    "ActionInvoked",
+                    &(id, action_key),
+                )
+                .await;
         }
     }
 

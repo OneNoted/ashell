@@ -4,14 +4,19 @@ use crate::{
     menu::MenuSize,
     services::{
         ReadOnlyService, ServiceEvent,
-        notifications::{CloseReason, NotificationEvent, NotificationService},
+        notifications::{
+            CloseReason, NotificationEvent, NotificationIcon, NotificationService,
+        },
     },
     theme::AshellTheme,
     utils::truncate_chars,
 };
 use iced::{
     Alignment, Element, Length, Subscription, Task,
-    widget::{button, column, container, horizontal_rule, row, scrollable, text, Column},
+    widget::{
+        Image, Row, Svg, button, column, container, horizontal_rule, mouse_area, row, scrollable,
+        text, Column,
+    },
     window::Id,
 };
 
@@ -20,6 +25,8 @@ pub enum Message {
     Event(ServiceEvent<NotificationService>),
     Dismiss(u32),
     DismissSignalSent,
+    InvokeAction(u32, String),
+    ActionSignalSent,
     ClearAll,
     ClearAllSignalsSent,
     MenuOpened,
@@ -27,7 +34,7 @@ pub enum Message {
 
 pub enum Action {
     None,
-    EmitDismissSignal(Task<Message>),
+    EmitSignal(Task<Message>),
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +89,7 @@ impl Notifications {
 
                     // Emit NotificationClosed D-Bus signal (reason: dismissed by user)
                     let service_clone = service.clone();
-                    return Action::EmitDismissSignal(Task::perform(
+                    return Action::EmitSignal(Task::perform(
                         async move {
                             service_clone
                                 .emit_closed_signal(id, CloseReason::Dismissed)
@@ -93,7 +100,28 @@ impl Notifications {
                 }
                 Action::None
             }
-            Message::DismissSignalSent | Message::ClearAllSignalsSent => Action::None,
+            Message::InvokeAction(id, action_key) => {
+                if let Some(service) = self.service.as_mut() {
+                    service.notifications.retain(|n| n.id != id);
+
+                    let service_clone = service.clone();
+                    return Action::EmitSignal(Task::perform(
+                        async move {
+                            service_clone
+                                .emit_action_invoked_signal(id, &action_key)
+                                .await;
+                            service_clone
+                                .emit_closed_signal(id, CloseReason::Dismissed)
+                                .await;
+                        },
+                        |_| Message::ActionSignalSent,
+                    ));
+                }
+                Action::None
+            }
+            Message::DismissSignalSent
+            | Message::ActionSignalSent
+            | Message::ClearAllSignalsSent => Action::None,
             Message::ClearAll => {
                 if let Some(service) = self.service.as_mut() {
                     let ids: Vec<u32> = service.notifications.iter().map(|n| n.id).collect();
@@ -102,7 +130,7 @@ impl Notifications {
 
                     // Emit NotificationClosed D-Bus signal for each dismissed notification
                     let service_clone = service.clone();
-                    return Action::EmitDismissSignal(Task::perform(
+                    return Action::EmitSignal(Task::perform(
                         async move {
                             for id in ids {
                                 service_clone
@@ -180,47 +208,110 @@ impl Notifications {
                                     let app = n.app_name.clone();
                                     let id = n.id;
 
-                                    container(
+                                    // Partition actions: default vs visible
+                                    let has_default_action =
+                                        n.actions.iter().any(|(k, _)| k == "default");
+                                    let visible_actions: Vec<_> = n
+                                        .actions
+                                        .iter()
+                                        .filter(|(k, _)| k != "default")
+                                        .collect();
+
+                                    // Icon element
+                                    let icon_element: Option<Element<'_, _, _>> =
+                                        n.icon.as_ref().map(|icon| match icon {
+                                            NotificationIcon::Image(handle) => {
+                                                Image::new(handle.clone())
+                                                    .height(Length::Fixed(24.))
+                                                    .into()
+                                            }
+                                            NotificationIcon::Svg(handle) => Svg::new(handle.clone())
+                                                .height(Length::Fixed(24.))
+                                                .width(Length::Fixed(24.))
+                                                .into(),
+                                        });
+
+                                    // Text content column
+                                    let mut text_col = column!(
                                         row!(
-                                            column!(
-                                                row!(
-                                                    text(app).size(theme.font_size.xs),
-                                                    text(time)
-                                                        .size(theme.font_size.xs)
-                                                        .color(
-                                                            theme
-                                                                .get_theme()
-                                                                .extended_palette()
-                                                                .secondary
-                                                                .base
-                                                                .text
-                                                        ),
-                                                )
-                                                .spacing(theme.space.xs),
-                                                text(summary).size(theme.font_size.sm),
-                                                if !body.is_empty() {
-                                                    std::convert::Into::<Element<'_, _, _>>::into(
-                                                        text(
-                                                            truncate_chars(&body, 200).to_owned(),
-                                                        )
-                                                        .size(theme.font_size.xs),
+                                            text(app).size(theme.font_size.xs),
+                                            text(time)
+                                                .size(theme.font_size.xs)
+                                                .color(
+                                                    theme
+                                                        .get_theme()
+                                                        .extended_palette()
+                                                        .secondary
+                                                        .base
+                                                        .text
+                                                ),
+                                        )
+                                        .spacing(theme.space.xs),
+                                        text(summary).size(theme.font_size.sm),
+                                    )
+                                    .spacing(2)
+                                    .width(Length::Fill);
+
+                                    if !body.is_empty() {
+                                        text_col = text_col.push(
+                                            text(truncate_chars(&body, 200).to_owned())
+                                                .size(theme.font_size.xs),
+                                        );
+                                    }
+
+                                    // Action buttons row
+                                    if !visible_actions.is_empty() {
+                                        let action_buttons: Vec<Element<'_, _, _>> =
+                                            visible_actions
+                                                .iter()
+                                                .map(|(key, label)| {
+                                                    button(
+                                                        text(label.clone())
+                                                            .size(theme.font_size.xs),
                                                     )
-                                                } else {
-                                                    std::convert::Into::<Element<'_, _, _>>::into(
-                                                        row!(),
-                                                    )
-                                                },
-                                            )
-                                            .spacing(2)
-                                            .width(Length::Fill),
+                                                    .style(theme.ghost_button_style())
+                                                    .padding([2, theme.space.xs])
+                                                    .on_press(Message::InvokeAction(
+                                                        id,
+                                                        key.clone(),
+                                                    ))
+                                                    .into()
+                                                })
+                                                .collect();
+                                        text_col = text_col.push(
+                                            Row::with_children(action_buttons)
+                                                .spacing(theme.space.xxs),
+                                        );
+                                    }
+
+                                    // Build the main row with optional icon
+                                    let mut content_row = row!().spacing(theme.space.xs).align_y(Alignment::Center);
+                                    if let Some(icon_el) = icon_element {
+                                        content_row = content_row.push(icon_el);
+                                    }
+                                    content_row = content_row
+                                        .push(text_col)
+                                        .push(
                                             icon_button::<Message>(theme, StaticIcon::Close)
                                                 .on_press(Message::Dismiss(id)),
-                                        )
-                                        .align_y(Alignment::Center)
-                                        .spacing(theme.space.xs),
-                                    )
-                                    .padding([theme.space.xs, 0])
-                                    .into()
+                                        );
+
+                                    let notification_content: Element<'_, _, _> =
+                                        container(content_row)
+                                            .padding([theme.space.xs, 0])
+                                            .into();
+
+                                    // Wrap with mouse_area for default action click
+                                    if has_default_action {
+                                        mouse_area(notification_content)
+                                            .on_press(Message::InvokeAction(
+                                                id,
+                                                "default".to_string(),
+                                            ))
+                                            .into()
+                                    } else {
+                                        notification_content
+                                    }
                                 })
                                 .collect::<Vec<Element<'_, _, _>>>(),
                         )

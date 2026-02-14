@@ -409,7 +409,7 @@ impl App {
             },
             Message::Notifications(msg) => match self.notifications.update(msg) {
                 modules::notifications::Action::None => Task::none(),
-                modules::notifications::Action::EmitDismissSignal(task) => {
+                modules::notifications::Action::EmitSignal(task) => {
                     task.map(Message::Notifications)
                 }
             },

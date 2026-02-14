@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use tokio::sync::mpsc::Sender;
 use zbus::{interface, object_server::SignalEmitter, zvariant::Value};
 
-use super::{CloseReason, Notification, NotificationEvent, Urgency};
+use crate::utils::strip_markup_tags;
+
+use super::{CloseReason, Notification, NotificationEvent, Urgency, resolve_icon};
 
 pub const BUS_NAME: &str = "org.freedesktop.Notifications";
 pub const OBJECT_PATH: &str = "/org/freedesktop/Notifications";
@@ -83,12 +85,16 @@ impl NotificationDaemon {
             })
             .collect();
 
+        let icon = resolve_icon(app_icon);
+        let clean_body = strip_markup_tags(body);
+
         let notification = Notification {
             id,
             app_name: app_name.to_string(),
             app_icon: app_icon.to_string(),
+            icon,
             summary: summary.to_string(),
-            body: body.to_string(),
+            body: clean_body,
             actions: parsed_actions,
             urgency,
             expire_timeout,
