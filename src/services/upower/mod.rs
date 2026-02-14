@@ -197,7 +197,7 @@ pub enum UPowerEvent {
     UpdateSystemBattery(BatteryData),
     UpdatePeripherals(Vec<Peripheral>),
     NoBattery,
-    UpdatePowerProfile(PowerProfile),
+    UpdatePowerProfile(Option<PowerProfile>),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -271,9 +271,10 @@ impl ReadOnlyService for UPowerService {
             UPowerEvent::NoBattery => {
                 self.system_battery = None;
             }
-            UPowerEvent::UpdatePowerProfile(profile) => {
+            UPowerEvent::UpdatePowerProfile(Some(profile)) => {
                 self.power_profile = profile;
             }
+            UPowerEvent::UpdatePowerProfile(None) => {}
         }
     }
 
@@ -354,10 +355,10 @@ impl UPowerService {
                 let state = battery.state().await;
                 let state = match state {
                     dbus::DeviceState::Charging => BatteryStatus::Charging(Duration::from_secs(
-                        battery.time_to_full().await as u64,
+                        battery.time_to_full().await.max(0) as u64,
                     )),
                     dbus::DeviceState::Discharging => BatteryStatus::Discharging(
-                        Duration::from_secs(battery.time_to_empty().await as u64),
+                        Duration::from_secs(battery.time_to_empty().await.max(0) as u64),
                     ),
                     dbus::DeviceState::FullyCharged => BatteryStatus::Full,
                     _ => BatteryStatus::Discharging(Duration::from_secs(0)),
@@ -424,7 +425,7 @@ impl UPowerService {
                         );
                         continue;
                     };
-                    BatteryStatus::Charging(Duration::from_secs(time_to_full as u64))
+                    BatteryStatus::Charging(Duration::from_secs(time_to_full.max(0) as u64))
                 }
                 2 => {
                     let Ok(time_to_empty) = device.time_to_empty().await else {
@@ -434,7 +435,7 @@ impl UPowerService {
                         );
                         continue;
                     };
-                    BatteryStatus::Discharging(Duration::from_secs(time_to_empty as u64))
+                    BatteryStatus::Discharging(Duration::from_secs(time_to_empty.max(0) as u64))
                 }
                 4 => BatteryStatus::Full,
                 _ => BatteryStatus::Discharging(Duration::from_secs(0)),
@@ -600,12 +601,12 @@ impl UPowerService {
                 .receive_active_profile_changed()
                 .await
                 .map(move |_| {
-                    UPowerEvent::UpdatePowerProfile(
+                    UPowerEvent::UpdatePowerProfile(Some(
                         powerprofiles
                             .cached_active_profile()
                             .map(|d| d.map(PowerProfile::from).unwrap_or_default())
                             .unwrap_or_default(),
-                    )
+                    ))
                 });
 
         Ok(stream_select!(
@@ -686,11 +687,15 @@ impl Service for UPowerService {
                 let conn = self.conn.clone();
                 let power_profile = self.power_profile;
                 async move {
-                    let powerprofiles = PowerProfilesProxy::new(&conn)
-                        .await
-                        .expect("Failed to create PowerProfilesProxy");
+                    let powerprofiles = match PowerProfilesProxy::new(&conn).await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            error!("Failed to create PowerProfilesProxy: {e}");
+                            return None;
+                        }
+                    };
 
-                    match command {
+                    Some(match command {
                         PowerProfileCommand::Toggle => {
                             let current_profile = power_profile;
                             match current_profile {
@@ -712,10 +717,12 @@ impl Service for UPowerService {
                                 PowerProfile::Unknown => PowerProfile::Unknown,
                             }
                         }
-                    }
+                    })
                 }
             },
-            |power_profile| ServiceEvent::Update(UPowerEvent::UpdatePowerProfile(power_profile)),
+            |power_profile| {
+                ServiceEvent::Update(UPowerEvent::UpdatePowerProfile(power_profile))
+            },
         )
     }
 }
