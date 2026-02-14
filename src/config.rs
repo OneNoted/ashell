@@ -898,7 +898,10 @@ pub fn subscription(path: &Path) -> Subscription<Message> {
                         debug!("Starting config file watch loop");
 
                         loop {
-                            let events = stream.next().await.unwrap_or(vec![]);
+                            let Some(events) = stream.next().await else {
+                                warn!("inotify stream ended unexpectedly");
+                                break;
+                            };
 
                             debug!("Received inotify events: {events:?}");
 
@@ -909,21 +912,21 @@ pub fn subscription(path: &Path) -> Subscription<Message> {
                                 match event {
                                     Ok(inotify::Event {
                                         name: Some(name),
-                                        mask: EventMask::DELETE | EventMask::MOVED_FROM,
+                                        mask,
                                         ..
                                     }) if file_name == name => {
-                                        debug!("File deleted or moved");
-                                        file_event = Some(Event::Removed);
-                                    }
-                                    Ok(inotify::Event {
-                                        name: Some(name),
-                                        mask:
-                                            EventMask::CREATE | EventMask::MODIFY | EventMask::MOVED_TO,
-                                        ..
-                                    }) if file_name == name => {
-                                        debug!("File created or moved");
-
-                                        file_event = Some(Event::Changed);
+                                        if mask.contains(EventMask::DELETE)
+                                            || mask.contains(EventMask::MOVED_FROM)
+                                        {
+                                            debug!("File deleted or moved");
+                                            file_event = Some(Event::Removed);
+                                        } else if mask.contains(EventMask::CREATE)
+                                            || mask.contains(EventMask::MODIFY)
+                                            || mask.contains(EventMask::MOVED_TO)
+                                        {
+                                            debug!("File created or modified");
+                                            file_event = Some(Event::Changed);
+                                        }
                                     }
                                     _ => {
                                         debug!("Ignoring event");
