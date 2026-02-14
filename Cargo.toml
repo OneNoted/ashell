@@ -72,6 +72,9 @@ niri-ipc = "25.11.0"
 parking_lot = "0.12.5"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/OneNoted/wgpu-hal", rev = "d82bd0b553f6e5122bba4063b4d58a2781c72798" }
+
 [build-dependencies]
 allsorts = "0.15"
 
