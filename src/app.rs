@@ -186,7 +186,7 @@ impl App {
             ))
             .map(Message::KeyboardLayout);
 
-        self.notifications = Notifications::new(config.notifications.clone());
+        self.notifications.config = config.notifications.clone();
         self.keyboard_submap = KeyboardSubmap::default();
         self.clock = Clock::new(config.clock);
         self.tempo = Tempo::new(config.tempo);
@@ -409,7 +409,7 @@ impl App {
             },
             Message::Notifications(msg) => match self.notifications.update(msg) {
                 modules::notifications::Action::None => Task::none(),
-                modules::notifications::Action::Command(task) => {
+                modules::notifications::Action::EmitDismissSignal(task) => {
                     task.map(Message::Notifications)
                 }
             },

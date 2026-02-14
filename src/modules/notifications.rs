@@ -3,13 +3,13 @@ use crate::{
     config::NotificationsModuleConfig,
     menu::MenuSize,
     services::{
-        ReadOnlyService, Service, ServiceEvent,
-        notifications::{NotificationCommand, NotificationEvent, NotificationService},
+        ReadOnlyService, ServiceEvent,
+        notifications::{CloseReason, NotificationEvent, NotificationService},
     },
     theme::AshellTheme,
 };
 use iced::{
-    Alignment, Element, Length, Subscription,
+    Alignment, Element, Length, Subscription, Task,
     widget::{button, column, container, horizontal_rule, row, scrollable, text, Column},
     window::Id,
 };
@@ -18,20 +18,31 @@ use iced::{
 pub enum Message {
     Event(ServiceEvent<NotificationService>),
     Dismiss(u32),
+    DismissSignalSent,
     ClearAll,
+    ClearAllSignalsSent,
     MenuOpened,
 }
 
 pub enum Action {
     None,
-    Command(iced::Task<Message>),
+    EmitDismissSignal(Task<Message>),
 }
 
 #[derive(Debug, Clone)]
 pub struct Notifications {
-    config: NotificationsModuleConfig,
+    pub(crate) config: NotificationsModuleConfig,
     service: Option<NotificationService>,
     unread_count: usize,
+}
+
+/// Truncate a string to at most `max_chars` characters (not bytes),
+/// avoiding panics on multi-byte UTF-8.
+fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
+    }
 }
 
 impl Notifications {
@@ -52,8 +63,19 @@ impl Notifications {
                 }
                 ServiceEvent::Update(notification_event) => {
                     if let Some(service) = self.service.as_mut() {
-                        if matches!(notification_event, NotificationEvent::Notify(_)) {
-                            self.unread_count += 1;
+                        match &notification_event {
+                            NotificationEvent::Notify(n) => {
+                                // Only increment unread for genuinely new notifications,
+                                // not replacements of existing ones
+                                let is_replacement = service
+                                    .notifications
+                                    .iter()
+                                    .any(|existing| existing.id == n.id);
+                                if !is_replacement {
+                                    self.unread_count += 1;
+                                }
+                            }
+                            NotificationEvent::Closed(_, _) => {}
                         }
                         service.update(notification_event);
                     }
@@ -63,13 +85,40 @@ impl Notifications {
             },
             Message::Dismiss(id) => {
                 if let Some(service) = self.service.as_mut() {
-                    let _ = service.command(NotificationCommand::Close(id));
+                    service.notifications.retain(|n| n.id != id);
+
+                    // Emit NotificationClosed D-Bus signal (reason: dismissed by user)
+                    let service_clone = service.clone();
+                    return Action::EmitDismissSignal(Task::perform(
+                        async move {
+                            service_clone
+                                .emit_closed_signal(id, CloseReason::Dismissed)
+                                .await;
+                        },
+                        |_| Message::DismissSignalSent,
+                    ));
                 }
                 Action::None
             }
+            Message::DismissSignalSent | Message::ClearAllSignalsSent => Action::None,
             Message::ClearAll => {
                 if let Some(service) = self.service.as_mut() {
+                    let ids: Vec<u32> = service.notifications.iter().map(|n| n.id).collect();
                     service.notifications.clear();
+                    self.unread_count = 0;
+
+                    // Emit NotificationClosed D-Bus signal for each dismissed notification
+                    let service_clone = service.clone();
+                    return Action::EmitDismissSignal(Task::perform(
+                        async move {
+                            for id in ids {
+                                service_clone
+                                    .emit_closed_signal(id, CloseReason::Dismissed)
+                                    .await;
+                            }
+                        },
+                        |_| Message::ClearAllSignalsSent,
+                    ));
                 }
                 self.unread_count = 0;
                 Action::None
@@ -158,11 +207,9 @@ impl Notifications {
                                                 text(summary).size(theme.font_size.sm),
                                                 if !body.is_empty() {
                                                     std::convert::Into::<Element<'_, _, _>>::into(
-                                                        text({
-                                                            let mut b = body;
-                                                            b.truncate(200);
-                                                            b
-                                                        })
+                                                        text(
+                                                            truncate_chars(&body, 200).to_owned(),
+                                                        )
                                                         .size(theme.font_size.xs),
                                                     )
                                                 } else {

@@ -11,13 +11,15 @@ pub const OBJECT_PATH: &str = "/org/freedesktop/Notifications";
 pub struct NotificationDaemon {
     next_id: u32,
     sender: Sender<NotificationEvent>,
+    default_timeout: i32,
 }
 
 impl NotificationDaemon {
-    pub fn new(sender: Sender<NotificationEvent>) -> Self {
+    pub fn new(sender: Sender<NotificationEvent>, default_timeout: i32) -> Self {
         Self {
             next_id: 1,
             sender,
+            default_timeout,
         }
     }
 }
@@ -39,7 +41,7 @@ impl NotificationDaemon {
         actions: Vec<&str>,
         hints: HashMap<&str, Value<'_>>,
         expire_timeout: i32,
-        #[zbus(signal_emitter)] _emitter: SignalEmitter<'_>,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
     ) -> u32 {
         let id = if replaces_id > 0 {
             replaces_id
@@ -101,6 +103,43 @@ impl NotificationDaemon {
             .sender
             .send(NotificationEvent::Notify(notification))
             .await;
+
+        // Auto-expiry: spawn a timer to close the notification
+        // Per spec: -1 = server decides, 0 = never expire, >0 = timeout in ms
+        if urgency != Urgency::Critical {
+            let timeout_ms = match expire_timeout {
+                t if t < 0 => self.default_timeout,
+                0 => 0, // never expire
+                t => t,
+            };
+
+            if timeout_ms > 0 {
+                let sender = self.sender.clone();
+                let emitter_conn = emitter
+                    .connection()
+                    .clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(timeout_ms as u64)).await;
+                    let _ = sender
+                        .send(NotificationEvent::Closed(id, CloseReason::Expired))
+                        .await;
+                    // Emit the D-Bus signal from the spawned task
+                    if let Ok(iface) = emitter_conn
+                        .object_server()
+                        .interface::<_, NotificationDaemon>(OBJECT_PATH)
+                        .await
+                    {
+                        let emitter = iface.signal_emitter();
+                        let _ = NotificationDaemon::notification_closed(
+                            emitter,
+                            id,
+                            CloseReason::Expired as u32,
+                        )
+                        .await;
+                    }
+                });
+            }
+        }
 
         id
     }

@@ -1,12 +1,13 @@
-use super::{ReadOnlyService, Service, ServiceEvent};
+use super::{ReadOnlyService, ServiceEvent};
 use dbus::{BUS_NAME, NotificationDaemon, OBJECT_PATH};
 use iced::{
-    Subscription, Task,
+    Subscription,
     futures::{SinkExt, StreamExt, channel::mpsc::Sender, stream::pending},
     stream::channel,
 };
-use log::{error, info};
+use log::{error, info, warn};
 use std::any::TypeId;
+use zbus::fdo::RequestNameFlags;
 
 pub mod dbus;
 
@@ -33,7 +34,6 @@ pub enum Urgency {
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u32)]
-#[allow(dead_code)]
 pub enum CloseReason {
     Expired = 1,
     Dismissed = 2,
@@ -47,23 +47,34 @@ pub enum NotificationEvent {
 }
 
 #[derive(Debug, Clone)]
-pub enum NotificationCommand {
-    Close(u32),
-}
-
-#[derive(Debug, Clone)]
 pub struct NotificationService {
     pub notifications: Vec<Notification>,
     pub max_notifications: usize,
     pub default_timeout: i32,
+    conn: Option<zbus::Connection>,
 }
 
 impl NotificationService {
-    fn new(max_notifications: usize, default_timeout: i32) -> Self {
+    fn new(max_notifications: usize, default_timeout: i32, conn: zbus::Connection) -> Self {
         Self {
             notifications: Vec::new(),
             max_notifications,
             default_timeout,
+            conn: Some(conn),
+        }
+    }
+
+    pub async fn emit_closed_signal(&self, id: u32, reason: CloseReason) {
+        if let Some(conn) = &self.conn {
+            let _ = conn
+                .emit_signal(
+                    None::<zbus::names::BusName>,
+                    OBJECT_PATH,
+                    "org.freedesktop.Notifications",
+                    "NotificationClosed",
+                    &(id, reason as u32),
+                )
+                .await;
         }
     }
 }
@@ -87,7 +98,7 @@ impl NotificationService {
                 info!("Initializing notification service");
 
                 let (tx, rx) = tokio::sync::mpsc::channel::<NotificationEvent>(100);
-                let daemon = NotificationDaemon::new(tx.clone());
+                let daemon = NotificationDaemon::new(tx, default_timeout);
 
                 match zbus::connection::Connection::session().await {
                     Ok(conn) => {
@@ -96,9 +107,15 @@ impl NotificationService {
                             return State::Error;
                         }
 
-                        match conn.request_name(BUS_NAME).await {
+                        let flags = RequestNameFlags::DoNotQueue
+                            | RequestNameFlags::ReplaceExisting
+                            | RequestNameFlags::AllowReplacement;
+
+                        match conn.request_name_with_flags(BUS_NAME, flags).await {
                             Ok(_) => {
                                 info!("Notification service registered as {BUS_NAME}");
+
+                                let service_conn = conn.clone();
 
                                 // Keep connection alive by spawning a task that holds it
                                 tokio::spawn(async move {
@@ -110,13 +127,14 @@ impl NotificationService {
                                     .send(ServiceEvent::Init(NotificationService::new(
                                         max_notifications,
                                         default_timeout,
+                                        service_conn,
                                     )))
                                     .await;
 
                                 State::Active(rx)
                             }
                             Err(e) => {
-                                error!("Failed to acquire bus name {BUS_NAME}: {e}");
+                                warn!("Failed to acquire bus name {BUS_NAME}: {e}. Another notification daemon may be running.");
                                 State::Error
                             }
                         }
@@ -174,8 +192,6 @@ impl ReadOnlyService for NotificationService {
     fn update(&mut self, event: Self::UpdateEvent) {
         match event {
             NotificationEvent::Notify(notification) => {
-                let default_timeout = self.default_timeout;
-
                 // If replaces_id, remove old
                 if let Some(pos) = self
                     .notifications
@@ -185,20 +201,9 @@ impl ReadOnlyService for NotificationService {
                     self.notifications.remove(pos);
                 }
 
-                // Handle auto-expiry via timeout
-                if notification.urgency != Urgency::Critical {
-                    let timeout = if notification.expire_timeout < 0 {
-                        default_timeout
-                    } else if notification.expire_timeout == 0 {
-                        default_timeout
-                    } else {
-                        notification.expire_timeout
-                    };
-
-                    if timeout > 0 && notification.transient {
-                        // Transient notifications are not stored
-                        return;
-                    }
+                // Transient notifications with a timeout are not stored in the list
+                if notification.transient && notification.urgency != Urgency::Critical {
+                    return;
                 }
 
                 self.notifications.insert(0, notification);
@@ -216,18 +221,5 @@ impl ReadOnlyService for NotificationService {
 
     fn subscribe() -> Subscription<ServiceEvent<Self>> {
         Self::subscribe_with_config(50, 5000)
-    }
-}
-
-impl Service for NotificationService {
-    type Command = NotificationCommand;
-
-    fn command(&mut self, command: Self::Command) -> Task<ServiceEvent<Self>> {
-        match command {
-            NotificationCommand::Close(id) => {
-                self.notifications.retain(|n| n.id != id);
-                Task::none()
-            }
-        }
     }
 }
