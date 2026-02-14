@@ -7,6 +7,7 @@ use crate::{
         notifications::{CloseReason, NotificationEvent, NotificationService},
     },
     theme::AshellTheme,
+    utils::truncate_chars,
 };
 use iced::{
     Alignment, Element, Length, Subscription, Task,
@@ -36,14 +37,6 @@ pub struct Notifications {
     unread_count: usize,
 }
 
-/// Truncate a string to at most `max_chars` characters (not bytes),
-/// avoiding panics on multi-byte UTF-8.
-fn truncate_chars(s: &str, max_chars: usize) -> &str {
-    match s.char_indices().nth(max_chars) {
-        Some((byte_idx, _)) => &s[..byte_idx],
-        None => s,
-    }
-}
 
 impl Notifications {
     pub fn new(config: NotificationsModuleConfig) -> Self {

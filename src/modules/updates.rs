@@ -3,6 +3,7 @@ use crate::{
     config::UpdatesModuleConfig,
     menu::MenuSize,
     theme::AshellTheme,
+    utils::truncate_chars,
 };
 use iced::{
     Alignment, Element, Length, Subscription, Task,
@@ -214,18 +215,8 @@ impl Updates {
                                                 .width(Length::Fill),
                                             text(format!(
                                                 "{} -> {}",
-                                                {
-                                                    let mut res = update.from.clone();
-                                                    res.truncate(18);
-
-                                                    res
-                                                },
-                                                {
-                                                    let mut res = update.to.clone();
-                                                    res.truncate(18);
-
-                                                    res
-                                                },
+                                                truncate_chars(&update.from, 18),
+                                                truncate_chars(&update.to, 18),
                                             ))
                                             .width(Length::Fill)
                                             .align_x(Horizontal::Right)

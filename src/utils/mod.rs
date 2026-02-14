@@ -20,6 +20,15 @@ pub fn format_duration(duration: &Duration) -> String {
     }
 }
 
+/// Truncate a string to at most `max_chars` characters (not bytes),
+/// avoiding panics on multi-byte UTF-8.
+pub fn truncate_chars(s: &str, max_chars: usize) -> &str {
+    match s.char_indices().nth(max_chars) {
+        Some((byte_idx, _)) => &s[..byte_idx],
+        None => s,
+    }
+}
+
 pub fn truncate_text(value: &str, max_length: u32) -> String {
     let length = value.len();
 
