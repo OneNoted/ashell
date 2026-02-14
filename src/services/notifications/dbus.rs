@@ -91,13 +91,11 @@ impl NotificationDaemon {
         let notification = Notification {
             id,
             app_name: app_name.to_string(),
-            app_icon: app_icon.to_string(),
             icon,
             summary: summary.to_string(),
             body: clean_body,
             actions: parsed_actions,
             urgency,
-            expire_timeout,
             timestamp: chrono::Local::now(),
             transient,
         };

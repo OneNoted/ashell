@@ -24,13 +24,11 @@ pub enum NotificationIcon {
 pub struct Notification {
     pub id: u32,
     pub app_name: String,
-    pub app_icon: String,
     pub icon: Option<NotificationIcon>,
     pub summary: String,
     pub body: String,
     pub actions: Vec<(String, String)>,
     pub urgency: Urgency,
-    pub expire_timeout: i32,
     pub timestamp: chrono::DateTime<chrono::Local>,
     pub transient: bool,
 }
@@ -100,16 +98,14 @@ pub enum NotificationEvent {
 pub struct NotificationService {
     pub notifications: Vec<Notification>,
     pub max_notifications: usize,
-    pub default_timeout: i32,
     conn: Option<zbus::Connection>,
 }
 
 impl NotificationService {
-    fn new(max_notifications: usize, default_timeout: i32, conn: zbus::Connection) -> Self {
+    fn new(max_notifications: usize, conn: zbus::Connection) -> Self {
         Self {
             notifications: Vec::new(),
             max_notifications,
-            default_timeout,
             conn: Some(conn),
         }
     }
@@ -190,7 +186,6 @@ impl NotificationService {
                                 let _ = output
                                     .send(ServiceEvent::Init(NotificationService::new(
                                         max_notifications,
-                                        default_timeout,
                                         service_conn,
                                     )))
                                     .await;
