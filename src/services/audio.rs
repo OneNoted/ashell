@@ -495,7 +495,9 @@ impl PulseAudioServer {
         loop {
             match mainloop.iterate(true) {
                 IterateResult::Quit(_) | IterateResult::Err(_) => {
-                    panic!("PulseAudio: iterate state was not success")
+                    return Err(anyhow::anyhow!(
+                        "PulseAudio: mainloop iterate failed during initialization"
+                    ));
                 }
                 IterateResult::Success(_) => {
                     if context.get_state() == context::State::Ready {
@@ -865,7 +867,10 @@ impl From<&SinkInfo<'_>> for Device {
                                 .name
                                 .as_ref()
                                 .map_or_else(String::default, |n| n.to_string()),
-                            description: port.description.as_ref().unwrap().to_string(),
+                            description: port
+                                .description
+                                .as_ref()
+                                .map_or_else(String::default, |d| d.to_string()),
                             device_type: match port.r#type {
                                 DevicePortType::Headphones => DeviceType::Headphones,
                                 DevicePortType::Speaker => DeviceType::Speaker,
@@ -908,7 +913,10 @@ impl From<&SourceInfo<'_>> for Device {
                                 .name
                                 .as_ref()
                                 .map_or_else(String::default, |n| n.to_string()),
-                            description: port.description.as_ref().unwrap().to_string(),
+                            description: port
+                                .description
+                                .as_ref()
+                                .map_or_else(String::default, |d| d.to_string()),
                             device_type: match port.r#type {
                                 DevicePortType::Headphones => DeviceType::Headphones,
                                 DevicePortType::Speaker => DeviceType::Speaker,
