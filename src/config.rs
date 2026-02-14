@@ -423,6 +423,10 @@ impl Default for MediaPlayerModuleConfig {
 pub struct NotificationsModuleConfig {
     pub max_notifications: usize,
     pub default_timeout: i32,
+    pub popup_enabled: bool,
+    pub popup_max_visible: usize,
+    pub popup_duration_ms: u64,
+    pub popup_animation_ms: u64,
 }
 
 impl Default for NotificationsModuleConfig {
@@ -430,6 +434,10 @@ impl Default for NotificationsModuleConfig {
         Self {
             max_notifications: 50,
             default_timeout: 5000,
+            popup_enabled: true,
+            popup_max_visible: 3,
+            popup_duration_ms: 5000,
+            popup_animation_ms: 200,
         }
     }
 }

@@ -21,6 +21,7 @@ use crate::{
         workspaces::Workspaces,
     },
     outputs::{HasOutput, Outputs},
+    popup::PopupState,
     services::ReadOnlyService,
     theme::{AshellTheme, backdrop_color, darken_color},
     widgets::{ButtonUIRef, Centerbox},
@@ -39,7 +40,7 @@ use iced::{
     window::Id,
 };
 use log::{debug, info, warn};
-use std::{collections::HashMap, f32::consts::PI, path::PathBuf};
+use std::{collections::HashMap, f32::consts::PI, path::PathBuf, time::Duration};
 use wayland_client::protocol::wl_output::WlOutput;
 
 pub struct GeneralConfig {
@@ -69,6 +70,7 @@ pub struct App {
     pub notifications: Notifications,
     pub settings: Settings,
     pub media_player: MediaPlayer,
+    pub popup_state: PopupState,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +93,9 @@ pub enum Message {
     Notifications(modules::notifications::Message),
     MediaPlayer(modules::media_player::Message),
     OutputEvent((OutputEvent, WlOutput)),
+    PopupTick,
+    PopupDismiss(u32),
+    PopupClicked(u32),
     CloseAllMenus,
     ResumeFromSleep,
     None,
@@ -134,6 +139,7 @@ impl App {
                     system_info: SystemInfo::new(config.system_info),
                     keyboard_layout: KeyboardLayout::new(config.keyboard_layout),
                     keyboard_submap: KeyboardSubmap::default(),
+                    popup_state: PopupState::new(&config.notifications),
                     notifications: Notifications::new(config.notifications.clone()),
                     tray: TrayModule::default(),
                     clock: Clock::new(config.clock),
@@ -187,6 +193,7 @@ impl App {
             .map(Message::KeyboardLayout);
 
         self.notifications.config = config.notifications.clone();
+        self.popup_state.update_config(&config.notifications);
         self.keyboard_submap = KeyboardSubmap::default();
         self.clock = Clock::new(config.clock);
         self.tempo = Tempo::new(config.tempo);
@@ -263,6 +270,7 @@ impl App {
                     MenuType::Notifications => {
                         self.notifications
                             .update(modules::notifications::Message::MenuOpened);
+                        self.popup_state.entries.clear();
                     }
                     MenuType::Settings => {
                         cmd.push(
@@ -412,11 +420,62 @@ impl App {
                 modules::notifications::Action::EmitSignal(task) => {
                     task.map(Message::Notifications)
                 }
+                modules::notifications::Action::ShowPopup(notification) => {
+                    if !self.notifications.config.popup_enabled
+                        || self.outputs.notification_menu_is_open()
+                    {
+                        return Task::none();
+                    }
+                    let duration =
+                        Duration::from_millis(self.notifications.config.popup_duration_ms);
+                    self.popup_state.enqueue(notification, duration);
+                    Task::none()
+                }
             },
             Message::MediaPlayer(msg) => match self.media_player.update(msg) {
                 modules::media_player::Action::None => Task::none(),
                 modules::media_player::Action::Command(task) => task.map(Message::MediaPlayer),
             },
+            Message::PopupTick => {
+                self.popup_state.tick();
+                Task::none()
+            }
+            Message::PopupDismiss(id) => {
+                self.popup_state.dismiss(id);
+                // Also dismiss from notification service
+                match self
+                    .notifications
+                    .update(modules::notifications::Message::Dismiss(id))
+                {
+                    modules::notifications::Action::EmitSignal(task) => {
+                        task.map(Message::Notifications)
+                    }
+                    _ => Task::none(),
+                }
+            }
+            Message::PopupClicked(id) => {
+                // Check if notification has a default action
+                let has_default = self
+                    .popup_state
+                    .entries
+                    .iter()
+                    .find(|e| e.notification.id == id)
+                    .is_some_and(|e| e.notification.actions.iter().any(|(k, _)| k == "default"));
+
+                if has_default {
+                    self.popup_state.dismiss(id);
+                    match self.notifications.update(
+                        modules::notifications::Message::InvokeAction(id, "default".to_string()),
+                    ) {
+                        modules::notifications::Action::EmitSignal(task) => {
+                            task.map(Message::Notifications)
+                        }
+                        _ => Task::none(),
+                    }
+                } else {
+                    Task::none()
+                }
+            }
             Message::CloseAllMenus => {
                 if self.outputs.menu_is_open() {
                     self.outputs
@@ -574,12 +633,13 @@ impl App {
                 ),
                 None => Row::new().into(),
             },
+            Some(HasOutput::Popup) => self.render_popup_bubble(),
             None => Row::new().into(),
         }
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch(vec![
+        let mut subs = vec![
             Subscription::batch(self.modules_subscriptions(&self.general_config.modules.left)),
             Subscription::batch(self.modules_subscriptions(&self.general_config.modules.center)),
             Subscription::batch(self.modules_subscriptions(&self.general_config.modules.right)),
@@ -606,6 +666,179 @@ impl App {
                 }
                 _ => None,
             }),
-        ])
+        ];
+
+        if self.popup_state.is_active() {
+            subs.push(
+                iced::time::every(Duration::from_millis(16)).map(|_| Message::PopupTick),
+            );
+        }
+
+        Subscription::batch(subs)
+    }
+
+    fn render_popup_bubble(&self) -> Element<'_, Message> {
+        use iced::widget::{Column, Image, Svg, column, container, horizontal_rule, row, text};
+        use iced::Border;
+        use crate::components::icons::{StaticIcon, icon_button};
+        use crate::services::notifications::NotificationIcon;
+
+        if self.popup_state.entries.is_empty() {
+            return container(Row::new())
+                .width(Length::Shrink)
+                .height(Length::Shrink)
+                .into();
+        }
+
+        let bubble_progress = self.popup_state.bubble_progress();
+        let theme = &self.theme;
+
+        let mut items: Vec<Element<'_, Message>> = Vec::new();
+        for (i, entry) in self.popup_state.entries.iter().enumerate() {
+            let entry_progress = self.popup_state.entry_progress_staggered(entry, i);
+            let entry_height = 80.0 * entry_progress.min(1.0); // clamp overshoot for clip
+
+            let n = &entry.notification;
+            let id = n.id;
+            let time = n.timestamp.format("%H:%M").to_string();
+            let has_default_action = n.actions.iter().any(|(k, _)| k == "default");
+
+            // Icon element
+            let icon_element: Option<Element<'_, Message>> =
+                n.icon.as_ref().map(|icon| match icon {
+                    NotificationIcon::Image(handle) => {
+                        Image::new(handle.clone())
+                            .height(Length::Fixed(24.))
+                            .into()
+                    }
+                    NotificationIcon::Svg(handle) => Svg::new(handle.clone())
+                        .height(Length::Fixed(24.))
+                        .width(Length::Fixed(24.))
+                        .into(),
+                });
+
+            let mut text_col = column!(
+                row!(
+                    text(&n.app_name).size(theme.font_size.xs),
+                    text(time)
+                        .size(theme.font_size.xs)
+                        .color(
+                            theme
+                                .get_theme()
+                                .extended_palette()
+                                .secondary
+                                .base
+                                .text
+                        ),
+                )
+                .spacing(theme.space.xs),
+                text(&n.summary).size(theme.font_size.sm),
+            )
+            .spacing(2)
+            .width(Length::Fill);
+
+            if !n.body.is_empty() {
+                let truncated = crate::utils::truncate_chars(&n.body, 100);
+                text_col = text_col.push(text(truncated.to_owned()).size(theme.font_size.xs));
+            }
+
+            let mut content_row = row!()
+                .spacing(theme.space.xs)
+                .align_y(Alignment::Center);
+            if let Some(icon_el) = icon_element {
+                content_row = content_row.push(icon_el);
+            }
+            content_row = content_row
+                .push(text_col)
+                .push(
+                    icon_button::<Message>(theme, StaticIcon::Close)
+                        .on_press(Message::PopupDismiss(id)),
+                );
+
+            let notification_content: Element<'_, Message> = container(content_row)
+                .padding([theme.space.xs, 0])
+                .into();
+
+            let notification_or_mouse_area: Element<'_, Message> = if has_default_action {
+                iced::widget::mouse_area(notification_content)
+                    .on_press(Message::PopupClicked(id))
+                    .into()
+            } else {
+                notification_content
+            };
+
+            // Build per-entry column with separator (after first entry)
+            let mut entry_col = Column::new();
+            if i > 0 {
+                entry_col = entry_col.push(horizontal_rule(1));
+            }
+            entry_col = entry_col.push(notification_or_mouse_area);
+
+            // Per-entry clip wrapper for staggered reveal
+            let clipped_entry = container(entry_col)
+                .clip(true)
+                .max_height(entry_height)
+                .width(Length::Fill);
+
+            items.push(clipped_entry.into());
+        }
+
+        let content = Column::with_children(items)
+            .spacing(2)
+            .padding([0, theme.space.xs]);
+
+        // Animated horizontal padding: squeeze content narrow then expand to rest
+        let width_progress = bubble_progress.min(1.0);
+        let extra_h_pad = (1.0 - width_progress) * 40.0;
+
+        // Styled bubble at full content height
+        // Use tighter top padding and smaller top border radius for flush appearance
+        let styled_bubble = container(content)
+            .padding(iced::Padding {
+                top: if theme.bar_style == AppearanceStyle::Islands {
+                    theme.space.md as f32
+                } else {
+                    0.0
+                },
+                bottom: theme.space.md as f32,
+                left: theme.space.md as f32 + extra_h_pad,
+                right: theme.space.md as f32 + extra_h_pad,
+            })
+            .style(move |t: &iced::Theme| iced::widget::container::Style {
+                background: Some(
+                    t.palette()
+                        .background
+                        .scale_alpha(theme.menu.opacity)
+                        .into(),
+                ),
+                border: Border {
+                    color: t
+                        .extended_palette()
+                        .secondary
+                        .base
+                        .color
+                        .scale_alpha(theme.menu.opacity),
+                    width: 1.,
+                    radius: if theme.bar_style == AppearanceStyle::Islands {
+                        [theme.radius.lg as f32; 4].into()
+                    } else {
+                        [0.0, 0.0, theme.radius.lg as f32, theme.radius.lg as f32].into()
+                    },
+                },
+                ..Default::default()
+            })
+            .width(Length::Fill);
+
+        // Clip wrapper reveals the bubble with animation
+        let max_height = {
+            let entry_count = self.popup_state.entries.len();
+            let target = (entry_count as f32) * 80.0 + 16.0;
+            target * bubble_progress
+        };
+
+        container(styled_bubble)
+            .clip(true)
+            .max_height(max_height)
+            .into()
     }
 }

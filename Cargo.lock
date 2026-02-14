@@ -2581,7 +2581,6 @@ dependencies = [
 [[package]]
 name = "iced"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "dnd",
  "iced_accessibility",
@@ -2599,7 +2598,6 @@ dependencies = [
 [[package]]
 name = "iced_accessibility"
 version = "0.1.0"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "accesskit",
  "accesskit_winit",
@@ -2608,7 +2606,6 @@ dependencies = [
 [[package]]
 name = "iced_core"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "bitflags 2.11.0",
  "bytes",
@@ -2631,7 +2628,6 @@ dependencies = [
 [[package]]
 name = "iced_futures"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "futures",
  "iced_core",
@@ -2657,7 +2653,6 @@ dependencies = [
 [[package]]
 name = "iced_graphics"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "bitflags 2.11.0",
  "bytemuck",
@@ -2679,7 +2674,6 @@ dependencies = [
 [[package]]
 name = "iced_renderer"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "iced_graphics",
  "iced_tiny_skia",
@@ -2691,7 +2685,6 @@ dependencies = [
 [[package]]
 name = "iced_runtime"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "bytes",
  "cosmic-client-toolkit",
@@ -2706,7 +2699,6 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -2722,7 +2714,6 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "as-raw-xcb-connection",
  "bitflags 2.11.0",
@@ -2753,7 +2744,6 @@ dependencies = [
 [[package]]
 name = "iced_widget"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "cosmic-client-toolkit",
  "dnd",
@@ -2771,7 +2761,6 @@ dependencies = [
 [[package]]
 name = "iced_winit"
 version = "0.14.0-dev"
-source = "git+https://github.com/OneNoted/iced?rev=79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead#79f23ed51eae9fd2c2e538a6f7fc59add7bb9ead"
 dependencies = [
  "cosmic-client-toolkit",
  "dnd",
@@ -6722,7 +6711,7 @@ dependencies = [
  "ndk-sys 0.5.0+25.2.9519653",
  "objc",
  "once_cell",
- "parking_lot 0.11.2",
+ "parking_lot 0.12.5",
  "profiling",
  "range-alloc",
  "raw-window-handle",

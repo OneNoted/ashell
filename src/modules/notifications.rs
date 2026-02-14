@@ -5,7 +5,7 @@ use crate::{
     services::{
         ReadOnlyService, ServiceEvent,
         notifications::{
-            CloseReason, NotificationEvent, NotificationIcon, NotificationService,
+            CloseReason, Notification, NotificationEvent, NotificationIcon, NotificationService,
         },
     },
     theme::AshellTheme,
@@ -35,6 +35,7 @@ pub enum Message {
 pub enum Action {
     None,
     EmitSignal(Task<Message>),
+    ShowPopup(Notification),
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +64,7 @@ impl Notifications {
                 }
                 ServiceEvent::Update(notification_event) => {
                     if let Some(service) = self.service.as_mut() {
-                        match &notification_event {
+                        let popup_notification = match &notification_event {
                             NotificationEvent::Notify(n) => {
                                 // Only increment unread for genuinely new notifications,
                                 // not replacements of existing ones
@@ -74,10 +75,14 @@ impl Notifications {
                                 if !is_replacement {
                                     self.unread_count += 1;
                                 }
+                                Some(n.clone())
                             }
-                            NotificationEvent::Closed(_, _) => {}
-                        }
+                            NotificationEvent::Closed(_, _) => None,
+                        };
                         service.update(notification_event);
+                        if let Some(n) = popup_notification {
+                            return Action::ShowPopup(n);
+                        }
                     }
                     Action::None
                 }

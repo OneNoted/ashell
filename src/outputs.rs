@@ -1,10 +1,10 @@
 use iced::{
-    Task,
+    Limits, Task,
     platform_specific::shell::commands::layer_surface::{
         Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface, set_anchor,
         set_exclusive_zone, set_keyboard_interactivity, set_size,
     },
-    runtime::platform_specific::wayland::layer_surface::{IcedOutput, SctkLayerSurfaceSettings},
+    runtime::platform_specific::wayland::layer_surface::{IcedMargin, IcedOutput, SctkLayerSurfaceSettings},
     window::Id,
 };
 use log::debug;
@@ -24,6 +24,7 @@ struct ShellInfo {
     layer: config::Layer,
     style: AppearanceStyle,
     menu: Menu,
+    popup_id: Id,
     scale_factor: f64,
 }
 
@@ -33,6 +34,7 @@ pub struct Outputs(Vec<(String, Option<ShellInfo>, Option<WlOutput>)>);
 pub enum HasOutput<'a> {
     Main,
     Menu(Option<&'a (MenuType, ButtonUIRef)>),
+    Popup,
 }
 
 impl Outputs {
@@ -42,7 +44,7 @@ impl Outputs {
         layer: config::Layer,
         scale_factor: f64,
     ) -> (Self, Task<Message>) {
-        let (id, menu_id, task) =
+        let (id, menu_id, popup_id, task) =
             Self::create_output_layers(style, None, position, layer, scale_factor);
 
         (
@@ -51,6 +53,7 @@ impl Outputs {
                 Some(ShellInfo {
                     id,
                     menu: Menu::new(menu_id),
+                    popup_id,
                     position,
                     layer,
                     style,
@@ -77,7 +80,7 @@ impl Outputs {
         position: Position,
         layer: config::Layer,
         scale_factor: f64,
-    ) -> (Id, Id, Task<Message>) {
+    ) -> (Id, Id, Id, Task<Message>) {
         let id = Id::unique();
         let height = Self::get_height(style, scale_factor);
 
@@ -111,14 +114,50 @@ impl Outputs {
             size: Some((None, None)),
             layer: Layer::Background,
             keyboard_interactivity: KeyboardInteractivity::None,
-            output: wl_output.map_or(IcedOutput::Active, |wl_output| {
+            output: wl_output.clone().map_or(IcedOutput::Active, |wl_output| {
                 IcedOutput::Output(wl_output)
             }),
             anchor: Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT,
             ..Default::default()
         });
 
-        (id, menu_id, Task::batch(vec![task, menu_task]))
+        let popup_id = Id::unique();
+        let popup_task = get_layer_surface(SctkLayerSurfaceSettings {
+            id: popup_id,
+            namespace: "ashell-popup-layer".to_string(),
+            size: None,
+            size_limits: Limits::NONE
+                .min_width(1.0)
+                .min_height(1.0)
+                .max_width(500.0)
+                .max_height(600.0),
+            layer: Layer::Overlay,
+            keyboard_interactivity: KeyboardInteractivity::None,
+            exclusive_zone: -1,
+            output: wl_output.map_or(IcedOutput::Active, |wl_output| {
+                IcedOutput::Output(wl_output)
+            }),
+            anchor: match position {
+                Position::Top => Anchor::TOP,
+                Position::Bottom => Anchor::BOTTOM,
+            } | Anchor::RIGHT,
+            margin: {
+                let gap = if style == AppearanceStyle::Islands { 4 } else { 0 };
+                match position {
+                    Position::Top => IcedMargin {
+                        top: height as i32 + gap,
+                        ..Default::default()
+                    },
+                    Position::Bottom => IcedMargin {
+                        bottom: height as i32 + gap,
+                        ..Default::default()
+                    },
+                }
+            },
+            ..Default::default()
+        });
+
+        (id, menu_id, popup_id, Task::batch(vec![task, menu_task, popup_task]))
     }
 
     fn name_in_config(name: &str, outputs: &config::Outputs) -> bool {
@@ -138,6 +177,8 @@ impl Outputs {
                     Some(HasOutput::Main)
                 } else if info.menu.id == id {
                     Some(HasOutput::Menu(info.menu.menu_info.as_ref()))
+                } else if info.popup_id == id {
+                    Some(HasOutput::Popup)
                 } else {
                     None
                 }
@@ -179,7 +220,7 @@ impl Outputs {
         if target {
             debug!("Found target output, creating a new layer surface");
 
-            let (id, menu_id, task) = Self::create_output_layers(
+            let (id, menu_id, popup_id, task) = Self::create_output_layers(
                 style,
                 Some(wl_output.clone()),
                 position,
@@ -195,8 +236,9 @@ impl Outputs {
                         Some(shell_info) => {
                             let destroy_main_task = destroy_layer_surface(shell_info.id);
                             let destroy_menu_task = destroy_layer_surface(shell_info.menu.id);
+                            let destroy_popup_task = destroy_layer_surface(shell_info.popup_id);
 
-                            Task::batch(vec![destroy_main_task, destroy_menu_task])
+                            Task::batch(vec![destroy_main_task, destroy_menu_task, destroy_popup_task])
                         }
                         _ => Task::none(),
                     }
@@ -209,6 +251,7 @@ impl Outputs {
                 Some(ShellInfo {
                     id,
                     menu: Menu::new(menu_id),
+                    popup_id,
                     position,
                     layer,
                     style,
@@ -229,10 +272,13 @@ impl Outputs {
                                     destroy_layer_surface(shell_info.id);
                                 let destroy_fallback_menu_task =
                                     destroy_layer_surface(shell_info.menu.id);
+                                let destroy_fallback_popup_task =
+                                    destroy_layer_surface(shell_info.popup_id);
 
                                 Task::batch(vec![
                                     destroy_fallback_main_task,
                                     destroy_fallback_menu_task,
+                                    destroy_fallback_popup_task,
                                 ])
                             }
                             _ => Task::none(),
@@ -270,8 +316,9 @@ impl Outputs {
                 let destroy_task = if let Some(shell_info) = shell_info {
                     let destroy_main_task = destroy_layer_surface(shell_info.id);
                     let destroy_menu_task = destroy_layer_surface(shell_info.menu.id);
+                    let destroy_popup_task = destroy_layer_surface(shell_info.popup_id);
 
-                    Task::batch(vec![destroy_main_task, destroy_menu_task])
+                    Task::batch(vec![destroy_main_task, destroy_menu_task, destroy_popup_task])
                 } else {
                     Task::none()
                 };
@@ -283,7 +330,7 @@ impl Outputs {
                 } else {
                     debug!("No outputs left, creating a fallback layer surface");
 
-                    let (id, menu_id, task) =
+                    let (id, menu_id, popup_id, task) =
                         Self::create_output_layers(style, None, position, layer, scale_factor);
 
                     self.0.push((
@@ -291,6 +338,7 @@ impl Outputs {
                         Some(ShellInfo {
                             id,
                             menu: Menu::new(menu_id),
+                            popup_id,
                             position,
                             layer,
                             style,
@@ -394,8 +442,9 @@ impl Outputs {
             {
                 let destroy_main_task = destroy_layer_surface(shell_info.id);
                 let destroy_menu_task = destroy_layer_surface(shell_info.menu.id);
+                let destroy_popup_task = destroy_layer_surface(shell_info.popup_id);
 
-                let (id, menu_id, task) = Self::create_output_layers(
+                let (id, menu_id, popup_id, task) = Self::create_output_layers(
                     style,
                     wl_output.clone(),
                     position,
@@ -405,6 +454,7 @@ impl Outputs {
 
                 shell_info.id = id;
                 shell_info.menu = Menu::new(menu_id);
+                shell_info.popup_id = popup_id;
                 shell_info.position = position;
                 shell_info.layer = layer;
                 shell_info.style = style;
@@ -413,6 +463,7 @@ impl Outputs {
                 tasks.push(Task::batch(vec![
                     destroy_main_task,
                     destroy_menu_task,
+                    destroy_popup_task,
                     task,
                 ]));
             }
@@ -640,5 +691,17 @@ impl Outputs {
             Some((_, Some(shell_info), _)) => shell_info.menu.release_keyboard(),
             _ => Task::none(),
         }
+    }
+
+    pub fn notification_menu_is_open(&self) -> bool {
+        self.0.iter().any(|(_, shell_info, _)| {
+            shell_info.as_ref().is_some_and(|shell_info| {
+                shell_info
+                    .menu
+                    .menu_info
+                    .as_ref()
+                    .is_some_and(|(t, _)| *t == MenuType::Notifications)
+            })
+        })
     }
 }
