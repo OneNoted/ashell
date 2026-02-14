@@ -261,6 +261,7 @@ impl StatusNotifierItem {
                         trace!("tray icon w {}, h {}", i.width, i.height);
                         (i.width, i.height)
                     })
+                    .filter(|i| i.width > 0 && i.height > 0)
                     .map(|mut i| {
                         // Convert ARGB to RGBA
                         for pixel in i.bytes.chunks_exact_mut(4) {
