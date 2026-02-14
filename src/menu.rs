@@ -17,6 +17,7 @@ pub enum MenuType {
     Settings,
     Tray(String),
     MediaPlayer,
+    Notifications,
     SystemInfo,
     Tempo,
 }

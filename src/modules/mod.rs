@@ -16,6 +16,7 @@ pub mod custom_module;
 pub mod keyboard_layout;
 pub mod keyboard_submap;
 pub mod media_player;
+pub mod notifications;
 pub mod privacy;
 pub mod settings;
 pub mod system_info;
@@ -286,6 +287,12 @@ impl App {
                 .privacy
                 .view(&self.theme)
                 .map(|view| (view.map(Message::Privacy), None)),
+            ModuleName::Notifications => Some((
+                self.notifications
+                    .view(&self.theme)
+                    .map(Message::Notifications),
+                Some(OnModulePress::ToggleMenu(MenuType::Notifications)),
+            )),
             ModuleName::MediaPlayer => self.media_player.view(&self.theme).map(|view| {
                 (
                     view.map(Message::MediaPlayer),
@@ -331,6 +338,11 @@ impl App {
             ModuleName::Clock => Some(self.clock.subscription().map(Message::Clock)),
             ModuleName::Tempo => Some(self.tempo.subscription().map(Message::Tempo)),
             ModuleName::Privacy => Some(self.privacy.subscription().map(Message::Privacy)),
+            ModuleName::Notifications => Some(
+                self.notifications
+                    .subscription()
+                    .map(Message::Notifications),
+            ),
             ModuleName::MediaPlayer => {
                 Some(self.media_player.subscription().map(Message::MediaPlayer))
             }

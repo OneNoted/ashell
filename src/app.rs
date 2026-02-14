@@ -10,6 +10,7 @@ use crate::{
         keyboard_layout::KeyboardLayout,
         keyboard_submap::KeyboardSubmap,
         media_player::MediaPlayer,
+        notifications::Notifications,
         privacy::Privacy,
         settings::Settings,
         system_info::SystemInfo,
@@ -65,6 +66,7 @@ pub struct App {
     pub clock: Clock,
     pub tempo: Tempo,
     pub privacy: Privacy,
+    pub notifications: Notifications,
     pub settings: Settings,
     pub media_player: MediaPlayer,
 }
@@ -86,6 +88,7 @@ pub enum Message {
     Tempo(modules::tempo::Message),
     Privacy(modules::privacy::Message),
     Settings(modules::settings::Message),
+    Notifications(modules::notifications::Message),
     MediaPlayer(modules::media_player::Message),
     OutputEvent((OutputEvent, WlOutput)),
     CloseAllMenus,
@@ -131,6 +134,7 @@ impl App {
                     system_info: SystemInfo::new(config.system_info),
                     keyboard_layout: KeyboardLayout::new(config.keyboard_layout),
                     keyboard_submap: KeyboardSubmap::default(),
+                    notifications: Notifications::new(config.notifications.clone()),
                     tray: TrayModule::default(),
                     clock: Clock::new(config.clock),
                     tempo: Tempo::new(config.tempo),
@@ -182,6 +186,7 @@ impl App {
             ))
             .map(Message::KeyboardLayout);
 
+        self.notifications = Notifications::new(config.notifications.clone());
         self.keyboard_submap = KeyboardSubmap::default();
         self.clock = Clock::new(config.clock);
         self.tempo = Tempo::new(config.tempo);
@@ -254,6 +259,10 @@ impl App {
                     MenuType::Tray(name) => {
                         self.tray
                             .update(modules::tray::Message::MenuOpened(name.clone()));
+                    }
+                    MenuType::Notifications => {
+                        self.notifications
+                            .update(modules::notifications::Message::MenuOpened);
                     }
                     MenuType::Settings => {
                         cmd.push(
@@ -397,6 +406,12 @@ impl App {
                     )
                 }
                 _ => Task::none(),
+            },
+            Message::Notifications(msg) => match self.notifications.update(msg) {
+                modules::notifications::Action::None => Task::none(),
+                modules::notifications::Action::Command(task) => {
+                    task.map(Message::Notifications)
+                }
             },
             Message::MediaPlayer(msg) => match self.media_player.update(msg) {
                 modules::media_player::Action::None => Task::none(),
@@ -545,6 +560,13 @@ impl App {
                     *button_ui_ref,
                 ),
 
+                Some((MenuType::Notifications, button_ui_ref)) => self.menu_wrapper(
+                    id,
+                    self.notifications
+                        .menu_view(id, &self.theme)
+                        .map(Message::Notifications),
+                    *button_ui_ref,
+                ),
                 Some((MenuType::Tempo, button_ui_ref)) => self.menu_wrapper(
                     id,
                     self.tempo.menu_view(&self.theme).map(Message::Tempo),

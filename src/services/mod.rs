@@ -10,6 +10,7 @@ pub mod mpris;
 pub mod network;
 pub mod privacy;
 mod throttle;
+pub mod notifications;
 pub mod tray;
 pub mod upower;
 

@@ -38,6 +38,7 @@ pub struct Config {
     pub appearance: Appearance,
     pub media_player: MediaPlayerModuleConfig,
     pub keyboard_layout: KeyboardLayoutModuleConfig,
+    pub notifications: NotificationsModuleConfig,
     pub enable_esc_key: bool,
 }
 
@@ -59,6 +60,7 @@ impl Default for Config {
             appearance: Appearance::default(),
             media_player: MediaPlayerModuleConfig::default(),
             keyboard_layout: KeyboardLayoutModuleConfig::default(),
+            notifications: NotificationsModuleConfig::default(),
             custom_modules: vec![],
             enable_esc_key: false,
         }
@@ -416,6 +418,22 @@ impl Default for MediaPlayerModuleConfig {
     }
 }
 
+#[derive(Deserialize, Clone, Debug)]
+#[serde(default)]
+pub struct NotificationsModuleConfig {
+    pub max_notifications: usize,
+    pub default_timeout: i32,
+}
+
+impl Default for NotificationsModuleConfig {
+    fn default() -> Self {
+        Self {
+            max_notifications: 50,
+            default_timeout: 5000,
+        }
+    }
+}
+
 #[derive(Deserialize, Clone, Copy, Debug)]
 #[serde(untagged)]
 pub enum AppearanceColor {
@@ -635,6 +653,7 @@ pub enum ModuleName {
     Privacy,
     Settings,
     MediaPlayer,
+    Notifications,
     Custom(String),
 }
 
@@ -666,6 +685,7 @@ impl<'de> Deserialize<'de> for ModuleName {
                     "Privacy" => ModuleName::Privacy,
                     "Settings" => ModuleName::Settings,
                     "MediaPlayer" => ModuleName::MediaPlayer,
+                    "Notifications" => ModuleName::Notifications,
                     other => ModuleName::Custom(other.to_string()),
                 })
             }
