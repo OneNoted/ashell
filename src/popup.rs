@@ -126,19 +126,32 @@ impl PopupState {
 
     /// Overall bubble visibility progress (0.0-1.0).
     /// Max of individual entry progresses so bubble stays visible while any entry animates.
+    #[cfg(test)]
     pub fn bubble_progress(&self) -> f32 {
+        self.bubble_progress_at(Instant::now())
+    }
+
+    pub fn bubble_progress_at(&self, now: Instant) -> f32 {
         self.entries
             .iter()
-            .map(|e| self.entry_progress(e))
+            .map(|e| self.entry_progress_at(e, now))
             .fold(0.0_f32, f32::max)
     }
 
+    #[cfg(test)]
     pub fn entry_progress_staggered(&self, entry: &PopupEntry, index: usize) -> f32 {
+        self.entry_progress_staggered_at(entry, index, Instant::now())
+    }
+
+    pub fn entry_progress_staggered_at(
+        &self,
+        entry: &PopupEntry,
+        index: usize,
+        now: Instant,
+    ) -> f32 {
         const STAGGER_DELAY_MS: u64 = 40;
 
-        let elapsed = Instant::now()
-            .duration_since(entry.phase_started)
-            .as_secs_f32();
+        let elapsed = now.duration_since(entry.phase_started).as_secs_f32();
         let anim = self.animation_duration.as_secs_f32();
         let stagger = index as f32 * (STAGGER_DELAY_MS as f32 / 1000.0);
 
@@ -156,16 +169,21 @@ impl PopupState {
         }
     }
 
+    #[cfg(test)]
     pub fn entry_progress(&self, entry: &PopupEntry) -> f32 {
-        let elapsed = Instant::now()
-            .duration_since(entry.phase_started)
-            .as_secs_f32();
+        self.entry_progress_at(entry, Instant::now())
+    }
+
+    /// Entry progress used for surface-level sizing. Uses ease_out_cubic (no overshoot)
+    /// so the Wayland surface never grows past its target size.
+    pub fn entry_progress_at(&self, entry: &PopupEntry, now: Instant) -> f32 {
+        let elapsed = now.duration_since(entry.phase_started).as_secs_f32();
         let anim = self.animation_duration.as_secs_f32();
 
         match entry.phase {
             PopupPhase::SlideIn => {
                 let t = (elapsed / anim).min(1.0);
-                ease_out_back(t)
+                ease_out_cubic(t)
             }
             PopupPhase::Display => 1.0,
             PopupPhase::SlideOut => {
@@ -174,12 +192,44 @@ impl PopupState {
             }
         }
     }
+
+    /// Compute stable surface height that avoids per-frame Wayland surface resizing.
+    /// - If any entry is active (SlideIn/Display): snap to full target immediately.
+    /// - If all entries are SlideOut: animate down monotonically (no overshoot).
+    /// - If no entries: 0.
+    pub fn target_surface_height_at(&self, now: Instant) -> f32 {
+        let active_count = self
+            .entries
+            .iter()
+            .filter(|e| e.phase != PopupPhase::SlideOut)
+            .count();
+
+        if active_count > 0 {
+            // Snap to full target — surface stays stable during entry animations
+            (active_count as f32) * 80.0 + 16.0
+        } else if !self.entries.is_empty() {
+            // All entries exiting — shrink monotonically using max progress
+            let max_progress = self
+                .entries
+                .iter()
+                .map(|e| self.entry_progress_at(e, now))
+                .fold(0.0_f32, f32::max);
+            let entry_count = self.entries.len();
+            ((entry_count as f32) * 80.0 + 16.0) * max_progress
+        } else {
+            0.0
+        }
+    }
 }
 
 fn ease_out_back(t: f32) -> f32 {
     let c1: f32 = 1.70158;
     let c3 = c1 + 1.0;
     1.0 + c3 * (t - 1.0).powi(3) + c1 * (t - 1.0).powi(2)
+}
+
+fn ease_out_cubic(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
 }
 
 fn ease_in_cubic(t: f32) -> f32 {
@@ -244,6 +294,24 @@ mod tests {
             .map(|i| ease_out_back(i as f32 / 100.0))
             .fold(0.0_f32, f32::max);
         assert!(peak > 1.0, "expected overshoot > 1.0, got {peak}");
+    }
+
+    #[test]
+    fn ease_out_cubic_boundaries() {
+        assert!((ease_out_cubic(0.0)).abs() < f32::EPSILON);
+        assert!((ease_out_cubic(1.0) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn ease_out_cubic_no_overshoot() {
+        for i in 0..=100 {
+            let t = i as f32 / 100.0;
+            let v = ease_out_cubic(t);
+            assert!(
+                v <= 1.0 + f32::EPSILON,
+                "ease_out_cubic({t}) = {v} overshoots 1.0"
+            );
+        }
     }
 
     #[test]
@@ -574,6 +642,61 @@ mod tests {
         let h = popup_max_height(1, 1.0);
         let (_, clamped_h) = auto_resize_target(500.0, h, 1.0, min_h);
         assert_eq!(clamped_h, 96.0);
+    }
+
+    // --- target_surface_height_at ---
+
+    #[test]
+    fn target_surface_height_snaps_for_active_entries() {
+        let config = test_config();
+        let mut state = PopupState::new(&config);
+
+        state.enqueue(make_notification(1), Duration::from_secs(5));
+        state.enqueue(make_notification(2), Duration::from_secs(5));
+
+        // Even at t≈0 (just enqueued), surface height should be full target
+        let now = Instant::now();
+        let height = state.target_surface_height_at(now);
+        let expected = 2.0 * 80.0 + 16.0; // 176.0
+        assert!(
+            (height - expected).abs() < f32::EPSILON,
+            "expected {expected}, got {height}"
+        );
+    }
+
+    #[test]
+    fn target_surface_height_shrinks_during_all_slideout() {
+        let config = test_config(); // 100ms animation
+        let mut state = PopupState::new(&config);
+
+        state.enqueue(make_notification(1), Duration::from_secs(5));
+
+        // Wait for SlideIn → Display
+        thread::sleep(Duration::from_millis(150));
+        state.tick();
+
+        // Dismiss to trigger SlideOut
+        state.dismiss(1);
+
+        // Height should decrease monotonically during SlideOut
+        let mut prev_height = f32::MAX;
+        for _ in 0..5 {
+            thread::sleep(Duration::from_millis(15));
+            let now = Instant::now();
+            let height = state.target_surface_height_at(now);
+            assert!(
+                height <= prev_height + f32::EPSILON,
+                "height increased: {prev_height} -> {height}"
+            );
+            prev_height = height;
+        }
+    }
+
+    #[test]
+    fn target_surface_height_is_zero_when_empty() {
+        let config = test_config();
+        let state = PopupState::new(&config);
+        assert_eq!(state.target_surface_height_at(Instant::now()), 0.0);
     }
 
     // --- Full lifecycle integration test ---

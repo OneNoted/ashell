@@ -40,7 +40,7 @@ use iced::{
     window::Id,
 };
 use log::{debug, info, warn};
-use std::{collections::HashMap, f32::consts::PI, path::PathBuf, time::Duration};
+use std::{collections::HashMap, f32::consts::PI, path::PathBuf, time::{Duration, Instant}};
 use wayland_client::protocol::wl_output::WlOutput;
 
 pub struct GeneralConfig {
@@ -690,12 +690,13 @@ impl App {
                 .into();
         }
 
-        let bubble_progress = self.popup_state.bubble_progress();
+        let now = Instant::now(); // single timestamp for entire frame
+        let bubble_progress = self.popup_state.bubble_progress_at(now);
         let theme = &self.theme;
 
         let mut items: Vec<Element<'_, Message>> = Vec::new();
         for (i, entry) in self.popup_state.entries.iter().enumerate() {
-            let entry_progress = self.popup_state.entry_progress_staggered(entry, i);
+            let entry_progress = self.popup_state.entry_progress_staggered_at(entry, i, now);
             let entry_height = 80.0 * entry_progress.min(1.0); // clamp overshoot for clip
 
             let n = &entry.notification;
@@ -829,12 +830,9 @@ impl App {
             })
             .width(Length::Fill);
 
-        // Clip wrapper reveals the bubble with animation
-        let max_height = {
-            let entry_count = self.popup_state.entries.len();
-            let target = (entry_count as f32) * 80.0 + 16.0;
-            target * bubble_progress
-        };
+        // Stable surface height: snaps to target during SlideIn/Display,
+        // only animates down during all-SlideOut (no overshoot, no per-frame resize)
+        let max_height = self.popup_state.target_surface_height_at(now);
 
         container(styled_bubble)
             .clip(true)
