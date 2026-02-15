@@ -843,10 +843,12 @@ impl App {
         match self.theme.bar_position {
             Position::Top => container(styled_bubble)
                 .clip(true)
+                .width(Length::Fill)
                 .align_top(target_height)
                 .into(),
             Position::Bottom => container(styled_bubble)
                 .clip(true)
+                .width(Length::Fill)
                 .align_bottom(target_height)
                 .into(),
         }
