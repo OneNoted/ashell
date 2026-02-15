@@ -828,17 +828,20 @@ pub fn get_config(path: Option<PathBuf>) -> Result<(Config, PathBuf), Box<dyn Er
                 }
             })
         }
-        None => expand_path(PathBuf::from(DEFAULT_CONFIG_FILE_PATH)).map(|expanded| {
-            let parent = expanded
-                .parent()
-                .expect("Failed to get default config parent directory");
+        None => expand_path(PathBuf::from(DEFAULT_CONFIG_FILE_PATH)).and_then(|expanded| {
+            let parent = expanded.parent().ok_or_else(|| {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "Failed to get default config parent directory",
+                )) as Box<dyn Error + Send>
+            })?;
 
             if !parent.exists() {
                 std::fs::create_dir_all(parent)
-                    .expect("Failed to create default config parent directory");
+                    .map_err(|e| Box::new(e) as Box<dyn Error + Send>)?;
             }
 
-            (read_config(&expanded).unwrap_or_default(), expanded)
+            Ok((read_config(&expanded).unwrap_or_default(), expanded))
         }),
     }
 }

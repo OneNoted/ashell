@@ -176,8 +176,8 @@ impl super::NetworkBackend for NetworkDbus<'_> {
             debug!("Activating VPN: {connection:?}");
             self.activate_connection(
                 connection,
-                OwnedObjectPath::try_from("/").unwrap(),
-                OwnedObjectPath::try_from("/").unwrap(),
+                OwnedObjectPath::try_from("/")?,
+                OwnedObjectPath::try_from("/")?,
             )
             .await?;
         } else {
@@ -248,7 +248,10 @@ impl NetworkDbus<'_> {
                 move |_| {
                     let conn = conn.clone();
                     async move {
-                        let nm = NetworkDbus::new(&conn).await.unwrap();
+                        let Ok(nm) = NetworkDbus::new(&conn).await else {
+                            warn!("Failed to create NetworkDbus for active connections");
+                            return NetworkEvent::ActiveConnections(vec![]);
+                        };
                         let value = nm.active_connections_info().await.unwrap_or_default();
 
                         debug!("Active connections changed: {value:?}");
@@ -270,7 +273,10 @@ impl NetworkDbus<'_> {
                     let conn = conn.clone();
                     let devices = devices.clone();
                     async move {
-                        let nm = NetworkDbus::new(&conn).await.unwrap();
+                        let Ok(nm) = NetworkDbus::new(&conn).await else {
+                            warn!("Failed to create NetworkDbus for device changes");
+                            return None;
+                        };
 
                         let current_devices = nm.wireless_devices().await.unwrap_or_default();
                         if current_devices != devices {
@@ -341,7 +347,10 @@ impl NetworkDbus<'_> {
                         move |_| {
                             let conn = conn.clone();
                             async move {
-                                let nm = NetworkDbus::new(&conn).await.unwrap();
+                                let Ok(nm) = NetworkDbus::new(&conn).await else {
+                                    warn!("Failed to create NetworkDbus for access point changes");
+                                    return NetworkEvent::WirelessAccessPoint(vec![]);
+                                };
                                 let wireless_access_point =
                                     nm.wireless_access_points().await.unwrap_or_default();
                                 debug!("access_points_changed {wireless_access_point:?}");
@@ -389,7 +398,10 @@ impl NetworkDbus<'_> {
                 move |_| {
                     let conn = conn.clone();
                     async move {
-                        let nm = NetworkDbus::new(&conn).await.unwrap();
+                        let Ok(nm) = NetworkDbus::new(&conn).await else {
+                            warn!("Failed to create NetworkDbus for known connections");
+                            return NetworkEvent::KnownConnections(vec![]);
+                        };
                         let known_connections = nm.known_connections().await.unwrap_or_default();
 
                         debug!("Known connections changed");
@@ -614,14 +626,6 @@ impl NetworkDbus<'_> {
                     .path(&path)?
                     .build()
                     .await?;
-                // disable scan for now for performance reason
-                // wireless_device.request_scan(HashMap::new()).await?;
-                // let mut scan_changed = wireless_device.receive_last_scan_changed().await;
-                // if let Some(t) = scan_changed.next().await {
-                //     if let Ok(-1) = t.get().await {
-                //         return Ok(Default::default());
-                //     }
-                // }
                 let access_points = wireless_device.get_access_points().await?;
                 let state: DeviceState = device
                     .cached_state()
@@ -719,7 +723,7 @@ impl NetworkSettingsDbus<'_> {
                     Value::Str(v) => v.to_string(),
                     _ => "".to_string(),
                 })
-                .unwrap();
+                .unwrap_or_default();
             if id == name {
                 return Ok(Some(connection.inner().path().to_owned().into()));
             }
