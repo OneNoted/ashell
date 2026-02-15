@@ -830,13 +830,25 @@ impl App {
             })
             .width(Length::Fill);
 
-        // Stable surface height: snaps to target during SlideIn/Display,
-        // only animates down during all-SlideOut (no overshoot, no per-frame resize)
-        let max_height = self.popup_state.target_surface_height_at(now);
+        // Fixed surface height: locks the Wayland surface size to prevent per-frame resizes.
+        // Content is aligned toward the bar edge; the transparent gap is invisible on overlay.
+        let top_pad = if theme.bar_style == AppearanceStyle::Islands {
+            theme.space.md as f32
+        } else {
+            0.0
+        };
+        let bottom_pad = theme.space.md as f32;
+        let target_height = self.popup_state.target_surface_height(top_pad, bottom_pad);
 
-        container(styled_bubble)
-            .clip(true)
-            .max_height(max_height)
-            .into()
+        match self.theme.bar_position {
+            Position::Top => container(styled_bubble)
+                .clip(true)
+                .align_top(target_height)
+                .into(),
+            Position::Bottom => container(styled_bubble)
+                .clip(true)
+                .align_bottom(target_height)
+                .into(),
+        }
     }
 }

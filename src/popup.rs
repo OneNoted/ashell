@@ -193,31 +193,16 @@ impl PopupState {
         }
     }
 
-    /// Compute stable surface height that avoids per-frame Wayland surface resizing.
-    /// - If any entry is active (SlideIn/Display): snap to full target immediately.
-    /// - If all entries are SlideOut: animate down monotonically (no overshoot).
-    /// - If no entries: 0.
-    pub fn target_surface_height_at(&self, now: Instant) -> f32 {
-        let active_count = self
-            .entries
-            .iter()
-            .filter(|e| e.phase != PopupPhase::SlideOut)
-            .count();
-
-        if active_count > 0 {
-            // Snap to full target — surface stays stable during entry animations
-            (active_count as f32) * 80.0 + 16.0
-        } else if !self.entries.is_empty() {
-            // All entries exiting — shrink monotonically using max progress
-            let max_progress = self
-                .entries
-                .iter()
-                .map(|e| self.entry_progress_at(e, now))
-                .fold(0.0_f32, f32::max);
-            let entry_count = self.entries.len();
-            ((entry_count as f32) * 80.0 + 16.0) * max_progress
-        } else {
+    /// Compute stable surface height using fixed layout to prevent per-frame Wayland resizes.
+    /// Uses `entries.len()` (including SlideOut entries) so the surface stays rock-stable
+    /// during animations. The surface only resizes on discrete events: entry added or removed.
+    pub fn target_surface_height(&self, top_pad: f32, bottom_pad: f32) -> f32 {
+        if self.entries.is_empty() {
             0.0
+        } else {
+            let count = self.entries.len() as f32;
+            let spacing = (self.entries.len().saturating_sub(1)) as f32 * 2.0;
+            count * 80.0 + top_pad + bottom_pad + spacing
         }
     }
 }
@@ -654,10 +639,10 @@ mod tests {
         state.enqueue(make_notification(1), Duration::from_secs(5));
         state.enqueue(make_notification(2), Duration::from_secs(5));
 
-        // Even at t≈0 (just enqueued), surface height should be full target
-        let now = Instant::now();
-        let height = state.target_surface_height_at(now);
-        let expected = 2.0 * 80.0 + 16.0; // 176.0
+        // Height should be based on entries.len(), padding, and spacing
+        let height = state.target_surface_height(16.0, 16.0);
+        // 2 entries * 80 + 16 top + 16 bottom + 1 spacing gap * 2 = 194.0
+        let expected = 2.0 * 80.0 + 16.0 + 16.0 + 2.0;
         assert!(
             (height - expected).abs() < f32::EPSILON,
             "expected {expected}, got {height}"
@@ -665,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn target_surface_height_shrinks_during_all_slideout() {
+    fn target_surface_height_stable_during_slideout() {
         let config = test_config(); // 100ms animation
         let mut state = PopupState::new(&config);
 
@@ -675,28 +660,51 @@ mod tests {
         thread::sleep(Duration::from_millis(150));
         state.tick();
 
-        // Dismiss to trigger SlideOut
+        // Dismiss to trigger SlideOut — entry still in vec
         state.dismiss(1);
 
-        // Height should decrease monotonically during SlideOut
-        let mut prev_height = f32::MAX;
-        for _ in 0..5 {
-            thread::sleep(Duration::from_millis(15));
-            let now = Instant::now();
-            let height = state.target_surface_height_at(now);
-            assert!(
-                height <= prev_height + f32::EPSILON,
-                "height increased: {prev_height} -> {height}"
-            );
-            prev_height = height;
-        }
+        // Height should stay stable (entries.len() still 1) during SlideOut
+        let height_before = state.target_surface_height(16.0, 16.0);
+        thread::sleep(Duration::from_millis(50));
+        let height_after = state.target_surface_height(16.0, 16.0);
+        assert!(
+            (height_before - height_after).abs() < f32::EPSILON,
+            "height changed during SlideOut: {height_before} -> {height_after}"
+        );
+        // 1 entry * 80 + 16 top + 16 bottom + 0 spacing = 112.0
+        let expected = 80.0 + 16.0 + 16.0;
+        assert!(
+            (height_before - expected).abs() < f32::EPSILON,
+            "expected {expected}, got {height_before}"
+        );
     }
 
     #[test]
     fn target_surface_height_is_zero_when_empty() {
         let config = test_config();
         let state = PopupState::new(&config);
-        assert_eq!(state.target_surface_height_at(Instant::now()), 0.0);
+        assert_eq!(state.target_surface_height(16.0, 16.0), 0.0);
+    }
+
+    #[test]
+    fn target_surface_height_includes_spacing() {
+        let config = test_config();
+        let mut state = PopupState::new(&config);
+
+        state.enqueue(make_notification(1), Duration::from_secs(5));
+        let h1 = state.target_surface_height(16.0, 16.0);
+        // 1 entry: 80 + 16 + 16 + 0 spacing = 112
+        assert!((h1 - 112.0).abs() < f32::EPSILON, "1 entry: expected 112, got {h1}");
+
+        state.enqueue(make_notification(2), Duration::from_secs(5));
+        let h2 = state.target_surface_height(16.0, 16.0);
+        // 2 entries: 160 + 16 + 16 + 2 spacing = 194
+        assert!((h2 - 194.0).abs() < f32::EPSILON, "2 entries: expected 194, got {h2}");
+
+        state.enqueue(make_notification(3), Duration::from_secs(5));
+        let h3 = state.target_surface_height(16.0, 16.0);
+        // 3 entries: 240 + 16 + 16 + 4 spacing = 276
+        assert!((h3 - 276.0).abs() < f32::EPSILON, "3 entries: expected 276, got {h3}");
     }
 
     // --- Full lifecycle integration test ---
